@@ -2,3 +2,4 @@
 .env
 start_venv.sh
 __pycache__/
+calculator/pkg/__pycache__/
