@@ -1,3 +1,4 @@
 /venv/*
 .env
 start_venv.sh
+**/__pycache__/
