@@ -21,7 +21,7 @@ def get_files_info(working_directory, directory=None):
                 f_size = os.path.getsize(file_path)
                 f_dir = os.path.isdir(file_path)
             except Exception as e:
-                return f"Error: An OS error occurred: {e}"
+                return f"Error: {e}"
             output += f"- {file}: file_size={f_size} bytes, is_dir={f_dir}\n"
             if f_dir:
                 dir_list.append(file_path)
