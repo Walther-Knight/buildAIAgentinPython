@@ -3,6 +3,18 @@ import sys
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from functions.get_files_info import get_files_info
+from functions.get_file_content import get_file_content
+from functions.write_file import write_file
+from functions.run_python_file import run_python_file
+
+#Define global
+working_directory = "./calculator"
+legal_functions = {"get_files_info": get_files_info,
+        "get_file_content": get_file_content,
+        "run_python_file": run_python_file,
+        "write_file": write_file,
+}  
 
 def main():
     if len(sys.argv) < 2:
@@ -15,6 +27,9 @@ You are a helpful AI coding agent.
 When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
 
 - List files and directories
+- Read file contents
+- Execute Python files with optional arguments
+- Write or overwrite files
 
 All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
 """
@@ -46,23 +61,58 @@ All paths you provide should be relative to the working directory. You do not ne
         },
     ),
 )
-   # schema_get_file_content = types.FunctionDeclaration(
-    #name="get_file_content",
-    #description="Gets the contents of a file, constrained to the working directory.",
-    #parameters=types.Schema(
-     #   type=types.Type.OBJECT,
-      #  properties={
-       #     "directory": types.Schema(
-        #        type=types.Type.STRING,
-         #       description="The file to get contents from, relative to the working directory. If not provided returns an error.",
-          #  ),
-        #},
-    #),
-#)
+    schema_get_file_content = types.FunctionDeclaration(
+    name="get_file_content",
+    description="Gets the contents of a file, constrained to the working directory.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The path to the file to get contents from, relative to the working directory. If not provided returns an error.",
+            ),
+        },
+    ),
+)
+    
+    schema_run_python_file = types.FunctionDeclaration(
+    name="run_python_file",
+    description="Runs a specified python file with arguments.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The path to the python file to execute, relative to the working directory. If not provided returns an error.",
+            ),
+        },
+    ),
+)
+    
+    schema_write_file = types.FunctionDeclaration(
+    name="write_file",
+    description="Writes a specified file with specified content.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The path to the python file to write, relative to the working directory. If not provided returns an error. If file does not exist, file is created.",
+            ),
+            "content": types.Schema(
+                type=types.Type.STRING,
+                description="The content to write to the file. If not provided returns an error.",
+            ),
+        },
+    ),
+)
 
     available_functions = types.Tool(
     function_declarations=[
         schema_get_files_info,
+        schema_get_file_content,
+        schema_run_python_file,
+        schema_write_file,
     ]
 )
     response = client.models.generate_content(
@@ -74,13 +124,48 @@ All paths you provide should be relative to the working directory. You do not ne
         )
     if response.function_calls:
         for function_call in response.function_calls:
-            print(f"Calling function: {function_call.name}({function_call.args})")
-    else:
+            if switch_value == "--verbose":
+                function_call_result = call_function(function_call, True)
+            else:
+                function_call_result = call_function(function_call)
+
+            if not function_call_result.parts[0].function_response.response:
+                raise "Fatal Error: function_call did not return a response"
+            
         if switch_value == "--verbose":
-            print(f"User prompt: {prompt_value}\nResponse: {response.text}\nPrompt tokens: {response.usage_metadata.prompt_token_count}\nResponse tokens: {response.usage_metadata.candidates_token_count}")
-        else:
-            print(f"Response: {response.text}")
+            print(f"-> {function_call_result.parts[0].function_response.response["result"]}")
+
+            
+def call_function(function_call_part, verbose=False):
+    if verbose:
+        print(f"Calling function: {function_call_part.name}({function_call_part.args})")
+    else:
+        print(f" - Calling function: {function_call_part.name}")
     
+    function_name = function_call_part.name
+    function_args = function_call_part.args
+    function_args["working_directory"] = working_directory
+    if function_name not in legal_functions:
+        return types.Content(
+    role="tool",
+    parts=[
+        types.Part.from_function_response(
+            name=function_name,
+            response={"error": f"Unknown function: {function_name}"},
+        )
+    ],
+)
+    function_result = legal_functions[function_name](**function_args)
+
+    return types.Content(
+    role="tool",
+    parts=[
+        types.Part.from_function_response(
+            name=function_name,
+            response={"result": function_result},
+        )
+    ],
+)
 
 
 if __name__ == "__main__":
