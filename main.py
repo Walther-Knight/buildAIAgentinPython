@@ -21,18 +21,26 @@ def main():
         print('Usage: python3 main.py <"prompt"> <optional switch>. Retry with proper syntax.')
         sys.exit(1)
 
-    system_prompt = system_prompt = """
-You are a helpful AI coding agent.
+    system_prompt = system_prompt = """You are a helpful coding assistant with access to file system tools. 
 
-When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
+You MUST use the available tools to explore and understand the codebase before answering questions. When a user asks about code functionality:
 
-- List files and directories
-- Read file contents
-- Execute Python files with optional arguments
-- Write or overwrite files
+1. FIRST use get_files_info with directory="." to see what files are available
+2. THEN use get_file_content to examine relevant files
+3. Use run_python_file if you need to test functionality
+4. Use write_file if you need to create or modify files
 
-All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
-"""
+Always start by exploring the file system. Don't ask the user for file paths - discover them yourself using the tools.
+
+The working_directory parameter is hard-coded for safety.
+
+Available tools:
+- get_files_info: Lists files in a directory (use "." for current directory)
+- get_file_content: Gets contents of a file
+- run_python_file: Runs a Python file
+- write_file: Writes content to a file
+
+Be proactive and use these tools to investigate the codebase!"""
 
     prompt_value = sys.argv[1]
     if len(sys.argv) > 2:
@@ -47,6 +55,8 @@ All paths you provide should be relative to the working directory. You do not ne
     messages = [
     types.Content(role="user", parts=[types.Part(text=prompt_value)]),
 ]
+    max_iterations = 20
+    iteration = 0
 
     schema_get_files_info = types.FunctionDeclaration(
     name="get_files_info",
@@ -59,6 +69,7 @@ All paths you provide should be relative to the working directory. You do not ne
                 description="The directory to list files from, relative to the working directory. If not provided, lists files in the working directory itself.",
             ),
         },
+        required=["directory"]
     ),
 )
     schema_get_file_content = types.FunctionDeclaration(
@@ -72,6 +83,7 @@ All paths you provide should be relative to the working directory. You do not ne
                 description="The path to the file to get contents from, relative to the working directory. If not provided returns an error.",
             ),
         },
+        required=["file_path"]
     ),
 )
     
@@ -86,6 +98,7 @@ All paths you provide should be relative to the working directory. You do not ne
                 description="The path to the python file to execute, relative to the working directory. If not provided returns an error.",
             ),
         },
+        required=["file_path"]
     ),
 )
     
@@ -104,6 +117,7 @@ All paths you provide should be relative to the working directory. You do not ne
                 description="The content to write to the file. If not provided returns an error.",
             ),
         },
+        required=["file_path", "content"]
     ),
 )
 
@@ -115,26 +129,34 @@ All paths you provide should be relative to the working directory. You do not ne
         schema_write_file,
     ]
 )
-    response = client.models.generate_content(
-        model= "gemini-2.0-flash-001",
-        contents=messages,
-        config=types.GenerateContentConfig(
-            tools=[available_functions], system_instruction=system_prompt
-            ),
-        )
-    if response.function_calls:
-        for function_call in response.function_calls:
-            if switch_value == "--verbose":
-                function_call_result = call_function(function_call, True)
-            else:
-                function_call_result = call_function(function_call)
+    while iteration < max_iterations:
+        response = client.models.generate_content(
+            model= "gemini-2.0-flash-001",
+            contents=messages,
+            config=types.GenerateContentConfig(
+                tools=[available_functions], system_instruction=system_prompt
+                ),
+            )
+        for candidate in response.candidates:
+            messages.append(candidate.content)
+        function_called = False
+        if response.function_calls:
+            function_called = True
+            for function_call in response.function_calls:
+                if switch_value == "--verbose":
+                    function_call_result = call_function(function_call, True)
+                else:
+                    function_call_result = call_function(function_call)
 
-            if not function_call_result.parts[0].function_response.response:
-                raise "Fatal Error: function_call did not return a response"
-            
-        if switch_value == "--verbose":
-            print(f"-> {function_call_result.parts[0].function_response.response["result"]}")
+                if not function_call_result.parts[0].function_response.response:
+                    raise "Fatal Error: function_call did not return a response"
 
+                messages.append(function_call_result)
+        if not function_called:
+            print("Final Response:")
+            print(response.text)
+            break
+        iteration += 1
             
 def call_function(function_call_part, verbose=False):
     if verbose:
